@@ -1,0 +1,51 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nuget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.x
+      - name: Verify immutable release version
+        shell: pwsh
+        run: |
+          $expected = $env:GITHUB_REF_NAME.Substring(1)
+          [xml]$project = Get-Content src/Paymos/Paymos.csproj
+          $actual = $project.Project.PropertyGroup.Version | Select-Object -First 1
+          if ($actual -ne $expected) { throw "tag $expected != package $actual" }
+      - run: dotnet format src/Paymos/Paymos.csproj --verify-no-changes
+      - run: dotnet build src/Paymos/Paymos.csproj --configuration Release
+      - run: dotnet run --project tests/Paymos.Conformance/Paymos.Conformance.csproj --configuration Release
+      - run: dotnet pack src/Paymos/Paymos.csproj --configuration Release --output artifacts
+      - name: Test the packed NuGet in isolation
+        run: |
+          dotnet new console --framework net8.0 --output /tmp/paymos-consumer
+          dotnet add /tmp/paymos-consumer package Paymos --source "$GITHUB_WORKSPACE/artifacts"
+          dotnet build /tmp/paymos-consumer --configuration Release
+      - uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        id: login
+        with:
+          # Public nuget.org profile name; authentication uses the short-lived
+          # GitHub OIDC token, so no repository secret is required.
+          user: paymos
+      - name: Publish immutable package
+        run: |
+          for package in artifacts/*.nupkg; do
+            dotnet nuget push "$package" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
