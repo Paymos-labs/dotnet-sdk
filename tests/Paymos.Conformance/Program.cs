@@ -38,6 +38,21 @@ var unavailableHandler = new SequenceHandler(HttpStatusCode.ServiceUnavailable);
 var unavailableClient = new PaymosClient("pk", "sk", new HttpClient(unavailableHandler), timeProvider: new FixedTimeProvider(), baseDelay: TimeSpan.Zero);
 try { await unavailableClient.Invoices.CreateAsync(new("prj_1", "10.00", "USD", "order_1")); throw new Exception("Expected API error"); }
 catch (PaymosApiException error) { Equal("unavailable", error.Kind); Equal(1, unavailableHandler.Attempts); }
+
+var multiProblem = vectors.GetProperty("problem_details").GetProperty("multi");
+var problemHandler = new ProblemHandler(HttpStatusCode.BadRequest, multiProblem.GetRawText());
+var problemClient = new PaymosClient("pk", "sk", new HttpClient(problemHandler), timeProvider: new FixedTimeProvider(), maxRetries: 0);
+try { await problemClient.System.TimeAsync(); throw new Exception("Expected API error"); }
+catch (PaymosApiException error)
+{
+    Equal("about:blank", error.Type);
+    Equal("Bad Request", error.Title);
+    Equal(400, error.ProblemStatus);
+    Equal("Validation failed.", error.Detail);
+    Equal("validation_failed", error.Code);
+    Equal<string?>(null, error.Field);
+    Equal("field_required", error.Errors.Single().Code);
+}
 Console.WriteLine("Paymos .NET conformance: PASS");
 
 static string Text(JsonElement value, string name) => value.GetProperty(name).GetString()!;
@@ -68,5 +83,10 @@ sealed class SequenceHandler(params HttpStatusCode[] statuses) : HttpMessageHand
 {
     public int Attempts { get; private set; }
     public int? RetryAfterSeconds { get; set; }
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { var status = statuses[Math.Min(Attempts, statuses.Length - 1)]; Attempts++; var response = new HttpResponseMessage(status) { Content = new StringContent(status is >= HttpStatusCode.OK and < HttpStatusCode.MultipleChoices ? "{\"invoice_id\":\"inv_1\",\"project_id\":\"prj_1\",\"status\":\"awaiting_payment\",\"is_final\":false,\"is_test\":true,\"payment_url\":\"https://pay.paymos.io/i/inv_1\",\"order\":{\"external_id\":\"order_1\",\"amount\":\"10.00\",\"currency\":\"USD\"},\"created_at\":1700000000,\"updated_at\":1700000000}" : "{\"detail\":\"retry later\"}") }; if (RetryAfterSeconds is { } seconds) response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(seconds)); return Task.FromResult(response); }
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { var status = statuses[Math.Min(Attempts, statuses.Length - 1)]; Attempts++; var response = new HttpResponseMessage(status) { Content = new StringContent(status is >= HttpStatusCode.OK and < HttpStatusCode.MultipleChoices ? "{\"invoice_id\":\"inv_1\",\"project_id\":\"prj_1\",\"status\":\"awaiting_payment\",\"is_final\":false,\"is_test\":true,\"payment_url\":\"https://pay.paymos.io/i/inv_1\",\"order\":{\"external_id\":\"order_1\",\"amount\":\"10.00\",\"currency\":\"USD\"},\"created_at\":1700000000,\"updated_at\":1700000000}" : $"{{\"type\":\"about:blank\",\"title\":\"{status}\",\"status\":{(int)status},\"detail\":\"retry later\",\"code\":\"{(status == HttpStatusCode.ServiceUnavailable ? "unavailable" : "rate_limited")}\"}}") }; if (RetryAfterSeconds is { } seconds) response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(seconds)); return Task.FromResult(response); }
+}
+sealed class ProblemHandler(HttpStatusCode status, string body) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+        Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
 }
