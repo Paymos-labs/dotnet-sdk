@@ -6,7 +6,7 @@
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <PackageId>Paymos</PackageId>
     <Title>Paymos .NET SDK</Title>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <Authors>Paymos Labs</Authors>
     <Copyright>Copyright © Paymos Labs</Copyright>
     <Description>Official .NET SDK for the Paymos Merchant API</Description>
