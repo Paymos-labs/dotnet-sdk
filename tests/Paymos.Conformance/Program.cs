@@ -26,7 +26,7 @@ await client.Invoices.CancelAsync("inv_1", "reason"); await client.Invoices.Conf
 await client.Withdrawals.CreateAsync(new("address", "tron", "USDT", "5.00", "payout_1")); await client.Withdrawals.GetAsync("wdr_1"); await client.Withdrawals.ListAsync(new(Limit: 1));
 await client.Withdrawals.CancelAsync("wdr_1", "reason"); await client.Withdrawals.SimulateCompletionAsync("wdr_1"); await client.Balances.GetAsync();
 Equal(new[] { "GET /v1/time", "POST /v1/invoices", "GET /v1/invoices/inv%2F1", "GET /v1/invoices?limit=1", "POST /v1/invoices/inv_1/cancel", "POST /v1/invoices/inv_1/confirm-payment", "POST /v1/sandbox/invoices/inv_1/simulate-payment", "POST /v1/withdrawals", "GET /v1/withdrawals/wdr_1", "GET /v1/withdrawals?limit=1", "POST /v1/withdrawals/wdr_1/cancel", "POST /v1/sandbox/withdrawals/wdr_1/simulate-completion", "GET /v1/balances" }, handler.Paths.ToArray());
-True(handler.UserAgents.All(x => x == "paymos-dotnet/1.0.0"));
+True(handler.UserAgents.All(x => x == $"paymos-dotnet/{SdkVersion.Value}"));
 
 var retryHandler = new SequenceHandler(HttpStatusCode.TooManyRequests, HttpStatusCode.OK);
 retryHandler.RetryAfterSeconds = 0;
