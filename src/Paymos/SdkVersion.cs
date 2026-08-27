@@ -2,5 +2,5 @@ namespace Paymos;
 
 public static class SdkVersion
 {
-    public const string Value = "1.1.1";
+    public const string Value = "1.2.0";
 }

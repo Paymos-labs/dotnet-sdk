@@ -26,6 +26,8 @@ public sealed class PaymosClient : IDisposable
 
     public InvoiceResource Invoices { get; }
     public WithdrawalResource Withdrawals { get; }
+    public PaymentChannelResource PaymentChannels { get; }
+    public PaymentChannelDepositResource PaymentChannelDeposits { get; }
     public BalanceResource Balances { get; }
     public SystemResource System { get; }
 
@@ -57,6 +59,8 @@ public sealed class PaymosClient : IDisposable
 
         Invoices = new InvoiceResource(this);
         Withdrawals = new WithdrawalResource(this);
+        PaymentChannels = new PaymentChannelResource(this);
+        PaymentChannelDeposits = new PaymentChannelDepositResource(this);
         Balances = new BalanceResource(this);
         System = new SystemResource(this);
     }
@@ -280,6 +284,107 @@ public sealed class WithdrawalResource(PaymosClient client)
             (value, cursor) => value with { Cursor = cursor },
             maxPages,
             cancellationToken);
+}
+
+public sealed class PaymentChannelResource(PaymosClient client)
+{
+    /// <summary>
+    /// Creates a channel — or hands back the one that already exists. The same project plus external
+    /// id answers 200 with the existing channel instead of 201 with a duplicate; both bodies are a
+    /// channel, so a caller never inspects the status and calling this on every checkout is safe.
+    /// </summary>
+    public Task<PaymentChannel> CreateAsync(
+        CreatePaymentChannelRequest payload,
+        CancellationToken cancellationToken = default) =>
+        client.SendAsync<PaymentChannel>(
+            "POST", "/v1/payment-channels", payload, cancellationToken: cancellationToken);
+
+    public Task<PaymentChannel> GetAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return client.SendAsync<PaymentChannel>(
+            "GET", $"/v1/payment-channels/{RequestSigner.EncodePathSegment(id)}",
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>An ordinary keyset page: <c>NextCursor</c> is null on the last page.</summary>
+    public Task<Page<PaymentChannel>> ListAsync(
+        PaymentChannelListOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        client.SendAsync<Page<PaymentChannel>>(
+            "GET", "/v1/payment-channels", query: RequestSigner.BuildQuery(options),
+            cancellationToken: cancellationToken);
+
+    /// <summary>Returns the updated channel — this is not a void call.</summary>
+    public Task<PaymentChannel> BlockAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return client.SendAsync<PaymentChannel>(
+            "POST", $"/v1/payment-channels/{RequestSigner.EncodePathSegment(id)}/block",
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>Returns the updated channel — this is not a void call.</summary>
+    public Task<PaymentChannel> UnblockAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return client.SendAsync<PaymentChannel>(
+            "POST", $"/v1/payment-channels/{RequestSigner.EncodePathSegment(id)}/unblock",
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>Sandbox only — a production credential gets an error, not a deposit.</summary>
+    public Task<PaymentChannelDeposit> SimulateDepositAsync(
+        string id,
+        SimulateDepositRequest payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload.Amount);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload.Currency);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload.Network);
+        return client.SendAsync<PaymentChannelDeposit>(
+            "POST", $"/v1/sandbox/payment-channels/{RequestSigner.EncodePathSegment(id)}/simulate-deposit",
+            payload, cancellationToken: cancellationToken);
+    }
+
+    public IAsyncEnumerable<PaymentChannel> IterateAsync(
+        PaymentChannelListOptions? options = null,
+        int maxPages = 100,
+        CancellationToken cancellationToken = default) =>
+        Cursor.Iterate(
+            ListAsync,
+            options ?? new PaymentChannelListOptions(),
+            value => value.Cursor,
+            (value, cursor) => value with { Cursor = cursor },
+            maxPages,
+            cancellationToken);
+}
+
+public sealed class PaymentChannelDepositResource(PaymosClient client)
+{
+    public Task<PaymentChannelDeposit> GetAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return client.SendAsync<PaymentChannelDeposit>(
+            "GET", $"/v1/payment-channel-deposits/{RequestSigner.EncodePathSegment(id)}",
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads ONE page of the confirmed-deposit feed. Deliberately not named <c>ListAsync</c> and
+    /// deliberately without an <c>IterateAsync</c>: the feed has no end, so a helper that loops until
+    /// the cursor is empty would either spin forever or stop on the first quiet page and leave a
+    /// merchant's reconciliation silently behind. Store <see cref="PaymentChannelDepositFeedPage.NextCursor"/>
+    /// after every poll — it is always present — and resume from it.
+    /// </summary>
+    public Task<PaymentChannelDepositFeedPage> ReadAsync(
+        PaymentChannelDepositFeedOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        client.SendAsync<PaymentChannelDepositFeedPage>(
+            "GET", "/v1/payment-channel-deposits", query: RequestSigner.BuildQuery(options),
+            cancellationToken: cancellationToken);
 }
 
 public sealed class BalanceResource(PaymosClient client)

@@ -163,6 +163,152 @@ public sealed record Page<T>
     public string? NextCursor { get; init; }
 }
 
+/// <summary>The three lifecycle stages the sandbox can drive a simulated deposit to.</summary>
+[JsonConverter(typeof(SimulateDepositStageJsonConverter))]
+public enum SimulateDepositStage
+{
+    Confirming,
+    Reorged,
+    Confirmed
+}
+
+public sealed record CreatePaymentChannelRequest(string ProjectId, string ExternalId);
+
+/// <summary>
+/// Sandbox deposit input. <c>Network</c> is REQUIRED. <c>Stage</c> defaults to confirmed and is
+/// omitted from the body entirely when left null — never sent as null or an empty string.
+/// </summary>
+public sealed record SimulateDepositRequest(
+    string Amount,
+    string Currency,
+    string Network,
+    SimulateDepositStage? Stage = null);
+
+public sealed record PaymentChannelListOptions(
+    int? Limit = null,
+    string? Cursor = null,
+    IReadOnlyList<string>? Status = null,
+    string? ExternalId = null,
+    string? ProjectId = null);
+
+/// <summary>
+/// Feed filters. <c>ConfirmedFrom</c> is an initial-sync lower bound for the very first poll, NOT the
+/// resume mechanism — afterwards a merchant resumes from the stored <c>NextCursor</c>.
+/// </summary>
+public sealed record PaymentChannelDepositFeedOptions(
+    int? Limit = null,
+    string? Cursor = null,
+    string? ProjectId = null,
+    string? PaymentChannelId = null,
+    long? ConfirmedFrom = null);
+
+public sealed record PaymentChannelToken
+{
+    public required string Symbol { get; init; }
+
+    /// <summary>
+    /// Absent means "cannot quote a minimum right now" — never "no minimum".
+    /// </summary>
+    public string? MinimumDeposit { get; init; }
+}
+
+public sealed record PaymentChannelNetwork
+{
+    /// <summary>Rail code, for example <c>TRC20</c> — not a chain nickname.</summary>
+    public required string Network { get; init; }
+
+    public required string Status { get; init; }
+
+    /// <summary>Absent until this rail provisions, and never changes afterwards.</summary>
+    public string? Address { get; init; }
+
+    public required IReadOnlyList<PaymentChannelToken> Tokens { get; init; }
+}
+
+public sealed record PaymentChannel
+{
+    public required string Id { get; init; }
+    public required string ProjectId { get; init; }
+    public required string ExternalId { get; init; }
+    public required string Status { get; init; }
+    public required bool IsAcceptingPayments { get; init; }
+    public required bool IsFullyProvisioned { get; init; }
+    public required bool IsTest { get; init; }
+    public required decimal AppliedFeePercent { get; init; }
+    public required byte CustomerFeePercent { get; init; }
+    public required IReadOnlyList<PaymentChannelNetwork> Networks { get; init; }
+    public required long CreatedAt { get; init; }
+    public required long UpdatedAt { get; init; }
+}
+
+/// <summary>
+/// The full payment-channel deposit wire shape — also the <c>data</c> payload of all three
+/// <c>payment_channel.deposit.*</c> webhook events, so <see cref="WebhookVerifier.ConstructEvent{TData}"/>
+/// decodes one straight into this record with no extra code.
+/// <para>
+/// ORDERING — <c>confirming</c> and <c>reorged</c> are ADVISORY and may arrive out of order: a
+/// <c>confirming</c> event can land after the <c>confirmed</c> for the same deposit, and a
+/// <c>reorged</c> event can be superseded by a later <c>confirmed</c>. Credit a merchant only on
+/// <c>payment_channel.deposit.confirmed</c> with <see cref="IsFinal"/> true, and never let an
+/// advisory event regress a deposit already known to be confirmed — crediting on <c>confirming</c>
+/// releases goods against money a reorg can still take back.
+/// </para>
+/// </summary>
+public sealed record PaymentChannelDeposit
+{
+    public required string Id { get; init; }
+    public required string PaymentChannelId { get; init; }
+    public required string ProjectId { get; init; }
+    public required string PaymentChannelExternalId { get; init; }
+    public required string Status { get; init; }
+    public required bool IsFinal { get; init; }
+    public required bool IsTest { get; init; }
+    public required string Currency { get; init; }
+    public required string Network { get; init; }
+    public required long ChainId { get; init; }
+    public string? ContractAddress { get; init; }
+    public required string Gross { get; init; }
+    public required string Fee { get; init; }
+    public required string Net { get; init; }
+    public required decimal AppliedFeePercent { get; init; }
+    public required byte CustomerFeePercent { get; init; }
+    public required string TxHash { get; init; }
+    public required string TransferId { get; init; }
+    public string? SourceAddress { get; init; }
+    public required string DestinationAddress { get; init; }
+    public required long BlockHeight { get; init; }
+    public long? FirstIncludedBlockTimestamp { get; init; }
+    public string? ExplorerUrl { get; init; }
+    public required long CreatedAt { get; init; }
+    public required long UpdatedAt { get; init; }
+    public long? ConfirmedAt { get; init; }
+}
+
+/// <summary>
+/// The one feed position that could not be rendered, and why. Without it a stuck feed is
+/// byte-identical to a quiet day, and a merchant cannot tell "no new payments" from
+/// "I am not seeing my money". Reason codes: <c>booked_auth_missing</c>, <c>inconsistent</c>,
+/// <c>deposit_missing</c>, <c>channel_missing</c>, <c>transfer_missing</c>, <c>not_confirmed</c>.
+/// </summary>
+public sealed record PaymentChannelDepositFeedBlockage
+{
+    public required string DepositId { get; init; }
+    public required string Reason { get; init; }
+}
+
+/// <summary>
+/// One page of the confirmed-deposit feed. Deliberately NOT <see cref="Page{T}"/>:
+/// <see cref="NextCursor"/> is non-nullable and always present, including on an empty page, because
+/// feed positions are global across all merchants and a filtered poller still has to advance past the
+/// ones it skipped. There is no last page — money keeps arriving — so never stop on the cursor.
+/// </summary>
+public sealed record PaymentChannelDepositFeedPage
+{
+    public required IReadOnlyList<PaymentChannelDeposit> Items { get; init; }
+    public required string NextCursor { get; init; }
+    public PaymentChannelDepositFeedBlockage? Blocked { get; init; }
+}
+
 public sealed record Balance
 {
     public required string Currency { get; init; }
@@ -200,4 +346,26 @@ internal sealed class WithdrawalStatusJsonConverter : JsonConverter<WithdrawalSt
 
     public override void Write(Utf8JsonWriter writer, WithdrawalStatus value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.Value);
+}
+
+internal sealed class SimulateDepositStageJsonConverter : JsonConverter<SimulateDepositStage>
+{
+    public override SimulateDepositStage Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.GetString() switch
+        {
+            "confirming" => SimulateDepositStage.Confirming,
+            "reorged" => SimulateDepositStage.Reorged,
+            "confirmed" => SimulateDepositStage.Confirmed,
+            var other => throw new JsonException($"Unknown deposit simulation stage: {other}.")
+        };
+
+    public override void Write(Utf8JsonWriter writer, SimulateDepositStage value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            SimulateDepositStage.Confirming => "confirming",
+            SimulateDepositStage.Reorged => "reorged",
+            SimulateDepositStage.Confirmed => "confirmed",
+            _ => throw new JsonException($"Unknown deposit simulation stage: {value}.")
+        });
 }

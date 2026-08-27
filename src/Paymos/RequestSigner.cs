@@ -58,6 +58,34 @@ public static class RequestSigner
         });
     }
 
+    public static string BuildQuery(PaymentChannelListOptions? options)
+    {
+        if (options is null)
+            return "";
+        return BuildQuery(new Dictionary<string, object?>
+        {
+            ["limit"] = options.Limit,
+            ["cursor"] = options.Cursor,
+            ["status"] = options.Status?.ToArray(),
+            ["external_id"] = options.ExternalId,
+            ["project_id"] = options.ProjectId
+        });
+    }
+
+    public static string BuildQuery(PaymentChannelDepositFeedOptions? options)
+    {
+        if (options is null)
+            return "";
+        return BuildQuery(new Dictionary<string, object?>
+        {
+            ["limit"] = options.Limit,
+            ["cursor"] = options.Cursor,
+            ["project_id"] = options.ProjectId,
+            ["payment_channel_id"] = options.PaymentChannelId,
+            ["confirmed_from"] = options.ConfirmedFrom
+        });
+    }
+
     public static string BuildQuery(IReadOnlyDictionary<string, object?> filters)
     {
         var parts = new List<string>();
