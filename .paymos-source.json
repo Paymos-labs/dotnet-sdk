@@ -1,6 +1,6 @@
 {
   "source_repository": "shockk73/paymos",
   "source_path": "plugins/dotnet-sdk",
-  "source_commit": "fb728401a0b39e904ab3650930207a2d3bd6ff5f",
-  "version": "1.2.0"
+  "source_commit": "8444cadd9f4e90238c8d7ccc2ab1bd949fe2af8f",
+  "version": "1.2.1"
 }
