@@ -53,6 +53,17 @@ public sealed class PaymosClient : IDisposable
         _baseUri = baseUri ?? new Uri("https://api.paymos.io", UriKind.Absolute);
         if (!_baseUri.IsAbsoluteUri)
             throw new ArgumentException("Base URI must be absolute.", nameof(baseUri));
+        // The API secret signs every request, so this scheme decides whether that credential is
+        // readable in transit. HTTPS in production; plain HTTP only against a loopback host, which
+        // is what a local integration test points at. Mirrors the Rust SDK's validate_base_url.
+        var loopback = _baseUri.IsLoopback;
+        if (!string.Equals(_baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && !(string.Equals(_baseUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) && loopback))
+        {
+            throw new ArgumentException(
+                "Base URI must use HTTPS (HTTP is allowed only for loopback tests).",
+                nameof(baseUri));
+        }
         _time = timeProvider ?? TimeProvider.System;
         _maxRetries = maxRetries;
         _baseDelay = baseDelay ?? TimeSpan.FromMilliseconds(150);

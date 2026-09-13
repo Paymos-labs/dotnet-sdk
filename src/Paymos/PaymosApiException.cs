@@ -52,7 +52,13 @@ public sealed class PaymosApiException : PaymosException
         Kind = statusCode switch
         {
             400 => "validation",
-            401 or 403 => "authentication",
+            401 => "authentication",
+            // 403 is its own category: the credential was accepted and something else refused. It
+            // carries wrong-key-type (payout_key_required, payment_key_required, forbidden) next to plain
+            // business state (whitelist_required, merchant_suspended, widget_inactive). Reporting an
+            // unwhitelisted payout address as "authentication" sends the on-call engineer to rotate
+            // perfectly good credentials. Switch on Code for the specific remedy.
+            403 => "permission",
             404 => "not_found",
             409 => "conflict",
             410 => "gone",
