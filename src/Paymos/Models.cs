@@ -103,6 +103,14 @@ public sealed record Invoice
     public required long UpdatedAt { get; init; }
     public long? ExpiresAt { get; init; }
     public long? CompletedAt { get; init; }
+
+    /// <summary>
+    /// invoice-late-payment: the late-payment fact — money crossed the invoice's total after it had
+    /// already closed as expired/underpaid. Unix seconds; absent from payloads serialized before the
+    /// field existed, null when the invoice was never paid late. <see cref="Status"/> keeps its
+    /// terminal meaning — this marker travels beside it.
+    /// </summary>
+    public long? PaidLateAt { get; init; }
 }
 
 public sealed record InvoiceListItem
@@ -120,6 +128,9 @@ public sealed record InvoiceListItem
     public required long CreatedAt { get; init; }
     public long? ExpiresAt { get; init; }
     public long? CompletedAt { get; init; }
+
+    /// <summary>invoice-late-payment: additive late mark, Unix seconds; absent in legacy payloads.</summary>
+    public long? PaidLateAt { get; init; }
 }
 
 public sealed record CreateWithdrawalRequest(
