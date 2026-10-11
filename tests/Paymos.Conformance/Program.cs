@@ -217,6 +217,29 @@ static string ChannelJson(string id, bool acceptingPayments) =>
     "\"networks\":[{\"network\":\"TRC20\",\"status\":\"active\",\"address\":\"TWd4Wr\",\"tokens\":[{\"symbol\":\"USDT\",\"minimum_deposit\":\"1.00\"},{\"symbol\":\"USDC\"}]}," +
     "{\"network\":\"BEP20\",\"status\":\"provisioning\",\"tokens\":[]}]," +
     "\"created_at\":1700000000,\"updated_at\":1700000000}";
+// invoice-late-payment wire contract (late-26): Invoice decodes paid_late_at (Unix seconds | null |
+// absent legacy) through the PUBLIC client path, beside an unchanged terminal status and payment.paid.
+{
+    const string MarkedJson = "{\"invoice_id\":\"inv_1\",\"project_id\":\"prj_1\",\"status\":\"expired\",\"is_final\":true,\"is_test\":false,\"payment_url\":\"https://pay.test/inv_1\",\"order\":{\"external_id\":\"order_1\",\"amount\":\"100.00\",\"currency\":\"USD\"},\"payment\":{\"currency\":\"USDT\",\"network\":\"tron\",\"chain_id\":728126428,\"expected\":\"100.00\",\"paid\":\"60.00\"},\"created_at\":1700000000,\"updated_at\":1700003600,\"expires_at\":1700003600,\"completed_at\":1700003600,\"paid_late_at\":1700007200}";
+
+    Invoice LateInvoice(string json) { var late = new PaymosClient("pk", "sk", new HttpClient(new FixedJsonHandler(json)), timeProvider: new FixedTimeProvider()); return late.Invoices.GetAsync("inv_1").GetAwaiter().GetResult(); }
+
+    var marked = LateInvoice(MarkedJson);
+    Equal(marked.Status, InvoiceStatus.Expired);
+    Equal(marked.IsFinal, true);
+    Equal(marked.PaidLateAt, 1700007200L);
+    Equal(marked.Payment!.Paid, "60.00");
+
+    var nullMarked = LateInvoice(MarkedJson.Replace("\"paid_late_at\":1700007200", "\"paid_late_at\":null"));
+    Equal((long?)nullMarked.PaidLateAt!, null);
+
+    var legacy = LateInvoice(MarkedJson.Replace(",\"paid_late_at\":1700007200", ""));
+    Equal((long?)legacy.PaidLateAt!, null);
+    Equal(legacy.Status, InvoiceStatus.Expired);
+
+    try { LateInvoice("{}"); throw new Exception("Expected required-field rejection"); } catch (Exception ex) { True(ex.Message.Length > 0); }
+}
+
 static string DepositJson() =>
     "{\"id\":\"pcd_1\",\"payment_channel_id\":\"pc_1\",\"project_id\":\"prj_1\",\"payment_channel_external_id\":\"customer-42\"," +
     "\"status\":\"confirmed\",\"is_final\":true,\"is_test\":true,\"currency\":\"USDT\",\"network\":\"TRC20\",\"chain_id\":728126428," +
@@ -226,6 +249,11 @@ static string DepositJson() =>
 static void Equal<T>(T expected, T actual) { if (expected is Array expectedArray && actual is Array actualArray) { if (!expectedArray.Cast<object?>().SequenceEqual(actualArray.Cast<object?>())) throw new Exception("Sequences differ"); return; } if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}, got {actual}"); }
 static void True(bool value) { if (!value) throw new Exception("Expected true"); }
 sealed class FixedTimeProvider : TimeProvider { public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(1700000000); }
+sealed class FixedJsonHandler(string json) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+        Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") });
+}
 sealed class CaptureHandler : HttpMessageHandler
 {
     public List<string> Paths { get; } = []; public List<string> UserAgents { get; } = [];

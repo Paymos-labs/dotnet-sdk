@@ -218,7 +218,7 @@ public sealed class InvoiceResource(PaymosClient client)
         CancellationToken cancellationToken = default)
     {
         ValidateId(id);
-        if (stage is not ("paid" or "overpaid" or "underpay" or "cancel"))
+        if (stage is not ("paid" or "overpaid" or "underpay" or "cancel" or "paid_late"))
             throw new ArgumentException("Invalid simulation stage.", nameof(stage));
         return client.SendAsync<Invoice>(
             "POST", $"/v1/sandbox/invoices/{RequestSigner.EncodePathSegment(id)}/simulate-payment",
