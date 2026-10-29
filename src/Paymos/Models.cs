@@ -168,6 +168,47 @@ public sealed record Withdrawal
     public long? CancelledAt { get; init; }
 }
 
+[JsonConverter(typeof(RefundModeJsonConverter))]
+public enum RefundMode
+{
+    Full,
+    Overpayment
+}
+
+/// <summary>CreatedFrom and CreatedTo use RFC 3339 timestamps with a timezone.</summary>
+public sealed record RefundListOptions(
+    int? Limit = null,
+    string? Cursor = null,
+    string? InvoiceId = null,
+    IReadOnlyList<WithdrawalStatus>? Status = null,
+    string? CreatedFrom = null,
+    string? CreatedTo = null);
+
+public sealed record Refund
+{
+    public required string WithdrawalId { get; init; }
+    public required string InvoiceId { get; init; }
+    public required RefundMode Mode { get; init; }
+    public required string ExternalOrderId { get; init; }
+    public required WithdrawalStatus Status { get; init; }
+    public required bool IsFinal { get; init; }
+    public required bool IsTest { get; init; }
+    public required string Amount { get; init; }
+    public string? Fee { get; init; }
+    public required string Currency { get; init; }
+    public required string Network { get; init; }
+    public required string DestinationAddress { get; init; }
+    public required string FirstSender { get; init; }
+    public string? Type { get; init; }
+    public string? ProjectId { get; init; }
+    public string? TxHash { get; init; }
+    public string? ExplorerUrl { get; init; }
+    public required long CreatedAt { get; init; }
+    public long? CompletedAt { get; init; }
+    public long? FailedAt { get; init; }
+    public long? CancelledAt { get; init; }
+}
+
 public sealed record Page<T>
 {
     public required IReadOnlyList<T> Items { get; init; }
@@ -357,6 +398,26 @@ internal sealed class WithdrawalStatusJsonConverter : JsonConverter<WithdrawalSt
 
     public override void Write(Utf8JsonWriter writer, WithdrawalStatus value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.Value);
+}
+
+internal sealed class RefundModeJsonConverter : JsonConverter<RefundMode>
+{
+    public override RefundMode Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.GetString() switch
+        {
+            "full" => RefundMode.Full,
+            "overpayment" => RefundMode.Overpayment,
+            var other => throw new JsonException($"Unknown refund mode: {other}.")
+        };
+
+    public override void Write(Utf8JsonWriter writer, RefundMode value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            RefundMode.Full => "full",
+            RefundMode.Overpayment => "overpayment",
+            _ => throw new JsonException($"Unknown refund mode: {value}.")
+        });
 }
 
 internal sealed class SimulateDepositStageJsonConverter : JsonConverter<SimulateDepositStage>
