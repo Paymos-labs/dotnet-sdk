@@ -26,6 +26,7 @@ public sealed class PaymosClient : IDisposable
 
     public InvoiceResource Invoices { get; }
     public WithdrawalResource Withdrawals { get; }
+    public RefundResource Refunds { get; }
     public PaymentChannelResource PaymentChannels { get; }
     public PaymentChannelDepositResource PaymentChannelDeposits { get; }
     public BalanceResource Balances { get; }
@@ -70,6 +71,7 @@ public sealed class PaymosClient : IDisposable
 
         Invoices = new InvoiceResource(this);
         Withdrawals = new WithdrawalResource(this);
+        Refunds = new RefundResource(this);
         PaymentChannels = new PaymentChannelResource(this);
         PaymentChannelDeposits = new PaymentChannelDepositResource(this);
         Balances = new BalanceResource(this);
@@ -98,13 +100,23 @@ public sealed class PaymosClient : IDisposable
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.UserAgent.ParseAdd($"paymos-dotnet/{SdkVersion.Value}");
 
+            // One deadline spans the whole attempt: send, status inspection and body read. The
+            // handler hands the response back at headers (ResponseHeadersRead), so the content read
+            // below would only ever see the caller's optional token and could otherwise wait past
+            // every configured timeout while a proxy stalls the body. The linked source keeps the
+            // caller's cancellation live and reuses HttpClient.Timeout as the per-attempt bound
+            // (InfiniteTimeSpan stays infinite by choice). It is disposed after the read, together
+            // with the rest of the attempt.
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptCts.CancelAfter(_http.Timeout);
+
             HttpResponseMessage response;
             try
             {
                 response = await _http.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken).ConfigureAwait(false);
+                    attemptCts.Token).ConfigureAwait(false);
             }
             catch (HttpRequestException) when (attempt < _maxRetries && IsSafe(method))
             {
@@ -115,7 +127,7 @@ public sealed class PaymosClient : IDisposable
             using (response)
             {
                 var responseBody = await response.Content
-                    .ReadAsStringAsync(cancellationToken)
+                    .ReadAsStringAsync(attemptCts.Token)
                     .ConfigureAwait(false);
                 if (attempt < _maxRetries &&
                     (response.StatusCode == HttpStatusCode.TooManyRequests ||
@@ -291,6 +303,58 @@ public sealed class WithdrawalResource(PaymosClient client)
         Cursor.Iterate(
             ListAsync,
             options ?? new WithdrawalListOptions(),
+            value => value.Cursor,
+            (value, cursor) => value with { Cursor = cursor },
+            maxPages,
+            cancellationToken);
+}
+
+public sealed class RefundResource(PaymosClient client)
+{
+    public Task<Refund> CreateAsync(
+        string invoiceId,
+        RefundMode mode,
+        string externalOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(invoiceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(externalOrderId);
+        if (mode is not (RefundMode.Full or RefundMode.Overpayment))
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        return client.SendAsync<Refund>(
+            "POST", "/v1/refunds", new { invoiceId, mode, externalOrderId },
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<Refund> SimulateAsync(string id, string status, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentNullException.ThrowIfNull(status);
+        return client.SendAsync<Refund>(
+            "POST", $"/v1/sandbox/refunds/{RequestSigner.EncodePathSegment(id)}/simulate", new { status },
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<Refund> GetAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return client.SendAsync<Refund>(
+            "GET", $"/v1/refunds/{RequestSigner.EncodePathSegment(id)}", cancellationToken: cancellationToken);
+    }
+
+    public Task<Page<Refund>> ListAsync(
+        RefundListOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        client.SendAsync<Page<Refund>>(
+            "GET", "/v1/refunds", query: RequestSigner.BuildQuery(options), cancellationToken: cancellationToken);
+
+    public IAsyncEnumerable<Refund> IterateAsync(
+        RefundListOptions? options = null,
+        int maxPages = 100,
+        CancellationToken cancellationToken = default) =>
+        Cursor.Iterate(
+            ListAsync,
+            options ?? new RefundListOptions(),
             value => value.Cursor,
             (value, cursor) => value with { Cursor = cursor },
             maxPages,

@@ -6,6 +6,13 @@ namespace Paymos;
 
 public sealed class WebhookVerifier
 {
+    // Header parsing accepts any non-negative long, but a DateTimeOffset cannot represent the whole
+    // long range. These are the unix-seconds bounds of DateTimeOffset.MinValue/MaxValue; a `t=`
+    // value outside them is rejected as a timestamp failure before FromUnixTimeSeconds would throw
+    // an ArgumentOutOfRangeException out of the public API.
+    private static readonly long MinUnixSeconds = DateTimeOffset.MinValue.ToUnixTimeSeconds();
+    private static readonly long MaxUnixSeconds = DateTimeOffset.MaxValue.ToUnixTimeSeconds();
+
     private readonly byte[] _secret;
     private readonly TimeSpan _tolerance;
 
@@ -27,6 +34,8 @@ public sealed class WebhookVerifier
     {
         var (timestamp, signatures) = ParseHeader(signatureHeader);
         var current = now ?? DateTimeOffset.UtcNow;
+        if (timestamp < MinUnixSeconds || timestamp > MaxUnixSeconds)
+            throw new WebhookTimestampException("Webhook timestamp is outside the representable range.");
         if ((current - DateTimeOffset.FromUnixTimeSeconds(timestamp)).Duration() > _tolerance)
             throw new WebhookTimestampException("Webhook timestamp is outside the allowed tolerance.");
         var prefix = Encoding.ASCII.GetBytes(timestamp + ".");

@@ -58,6 +58,21 @@ public static class RequestSigner
         });
     }
 
+    public static string BuildQuery(RefundListOptions? options)
+    {
+        if (options is null)
+            return "";
+        return BuildQuery(new Dictionary<string, object?>
+        {
+            ["limit"] = options.Limit,
+            ["cursor"] = options.Cursor,
+            ["invoice_id"] = options.InvoiceId,
+            ["status"] = options.Status?.Select(value => value.Value).ToArray(),
+            ["created_from"] = options.CreatedFrom,
+            ["created_to"] = options.CreatedTo
+        });
+    }
+
     public static string BuildQuery(PaymentChannelListOptions? options)
     {
         if (options is null)

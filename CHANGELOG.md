@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-29
+
+- fix(sdk): preserve current refund contracts in TON conformance
+- fix(ton): return friendly addresses with existing webhook schema
+- feat(sdk-dotnet): add refund create, get and list
+- fix: remediate all 28 platform-wide audit findings (2026-10-23)
+
+- **403 is no longer reported as an authentication failure.** `PaymosApiException.Kind` is `"permission"` for 403; 401 keeps `"authentication"`.
+- **Base URL must use HTTPS.** Plain HTTP is accepted only against a loopback host, which is what a local integration test points at. The API secret signs every request, so a plaintext base URL put that credential on the wire.
+
+- Payment channels: `PaymentChannels` (create, get, list, block, unblock, simulate deposit, bounded
+  iterate) and `PaymentChannelDeposits` (get, read). The deposit endpoint is a feed, not a list — its
+  `PaymentChannelDepositFeedPage.NextCursor` is never null, `Blocked` explains a stalled position, and
+  it deliberately ships no auto-iterator. The three `payment_channel.deposit.*` webhook events decode
+  straight into `PaymentChannelDeposit` through the existing generic `WebhookVerifier.ConstructEvent<TData>`
+  — no new decoding code. `confirming`/`reorged` are advisory and may arrive out of order; only
+  `confirmed` with `IsFinal` true should credit a merchant.
+
 ## [1.3.1] - 2026-10-14
 
 - Fix invoice-late-payment audit findings (tasks 4.1-4.8)

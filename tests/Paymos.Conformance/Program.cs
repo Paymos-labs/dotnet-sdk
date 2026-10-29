@@ -24,6 +24,7 @@ var typedWebhook = verifier.ConstructEvent<JsonElement>(Text(webhook, "header"),
 Equal("evt_123", typedWebhook.EventId);
 Equal("inv_123", typedWebhook.Data.GetProperty("invoice_id").GetString());
 True(!verifier.Verify(Text(webhook, "header") + ",t=" + webhook.GetProperty("timestamp").GetInt64(), Encoding.UTF8.GetBytes(Text(webhook, "raw_body")), DateTimeOffset.FromUnixTimeSeconds(webhook.GetProperty("now").GetInt64())));
+TonWebhookTests.Run(vectors.GetProperty("ton_webhooks"));
 
 var handler = new CaptureHandler();
 var client = new PaymosClient("pk_test_key", "sk_test_secret", new HttpClient(handler), timeProvider: new FixedTimeProvider());
@@ -207,6 +208,113 @@ True(webhookDeposit.IsFinal);
 Equal<string?>(null, webhookDeposit.ContractAddress); Equal<string?>(null, webhookDeposit.SourceAddress);
 Equal<string?>(null, webhookDeposit.ExplorerUrl); Equal<long?>(null, webhookDeposit.FirstIncludedBlockTimestamp);
 
+// A10-01: one deadline spans send AND body read. The handler below flushes headers immediately
+// and then stalls the body, which is exactly the shape a broken proxy produces. The per-attempt
+// linked source must cut the read off at HttpClient.Timeout instead of waiting on the caller's
+// optional token forever. The stalled POST additionally proves a timed-out body is an UNKNOWN
+// outcome: with retries available it is still sent exactly once.
+var stalledGetHandler = new StalledBodyHandler();
+var stalledGetClient = new PaymosClient(
+    "pk", "sk", new HttpClient(stalledGetHandler) { Timeout = TimeSpan.FromMilliseconds(150) },
+    timeProvider: new FixedTimeProvider(), maxRetries: 2);
+try { await stalledGetClient.System.TimeAsync(); throw new Exception("Expected stalled body to hit the attempt deadline"); }
+catch (OperationCanceledException) { }
+Equal(1, stalledGetHandler.Attempts);
+
+var stalledPostHandler = new StalledBodyHandler();
+var stalledPostClient = new PaymosClient(
+    "pk", "sk", new HttpClient(stalledPostHandler) { Timeout = TimeSpan.FromMilliseconds(150) },
+    timeProvider: new FixedTimeProvider(), maxRetries: 2);
+try { await stalledPostClient.Invoices.CancelAsync("inv_1", "reason"); throw new Exception("Expected stalled body to hit the attempt deadline"); }
+catch (OperationCanceledException) { }
+Equal(1, stalledPostHandler.Attempts);
+
+// The caller's own token stays in charge of the same attempt: cancelling it mid-body surfaces as
+// OperationCanceledException, not as a silent wait for the 30s attempt deadline.
+var callerCancelHandler = new StalledBodyHandler();
+var callerCancelClient = new PaymosClient(
+    "pk", "sk", new HttpClient(callerCancelHandler) { Timeout = TimeSpan.FromSeconds(30) },
+    timeProvider: new FixedTimeProvider(), maxRetries: 0);
+using var callerCancelCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+try { await callerCancelClient.System.TimeAsync(callerCancelCts.Token); throw new Exception("Expected caller cancellation to surface"); }
+catch (OperationCanceledException) { True(callerCancelCts.IsCancellationRequested); }
+
+// A10-03: a `t=` value that parses as a long but cannot become a DateTimeOffset/Instant must fail
+// as a typed webhook error — Verify returns false and AssertValid throws WebhookTimestampException —
+// never as an ArgumentOutOfRangeException escaping the public API before the HMAC even runs.
+var rangeVerifier = new WebhookVerifier("whsec_test");
+var rangeNow = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000L);
+var rangeBody = Encoding.UTF8.GetBytes("{}");
+True(!rangeVerifier.Verify("t=9223372036854775807,v1=00", rangeBody, rangeNow));
+try { rangeVerifier.AssertValid("t=9223372036854775807,v1=00", rangeBody, rangeNow); throw new Exception("Expected typed timestamp range failure"); }
+catch (WebhookTimestampException) { }
+// Datetime-domain boundary: the last representable second is merely stale (tolerance failure);
+// one second past it is out of range. Both are typed failures, both Verify to false.
+var maxRepresentable = DateTimeOffset.MaxValue.ToUnixTimeSeconds();
+True(!rangeVerifier.Verify($"t={maxRepresentable},v1=00", rangeBody, rangeNow));
+try { rangeVerifier.AssertValid($"t={maxRepresentable},v1=00", rangeBody, rangeNow); throw new Exception("Expected tolerance failure at the representable edge"); }
+catch (WebhookTimestampException) { }
+True(!rangeVerifier.Verify($"t={maxRepresentable + 1},v1=00", rangeBody, rangeNow));
+try { rangeVerifier.AssertValid($"t={maxRepresentable + 1},v1=00", rangeBody, rangeNow); throw new Exception("Expected range failure one second past the edge"); }
+catch (WebhookTimestampException) { }
+True(!rangeVerifier.Verify("t=-1,v1=00", rangeBody, rangeNow));
+// An ordinary stale-but-representable timestamp keeps its existing typed failure.
+True(!rangeVerifier.Verify("t=1600000000,v1=00", rangeBody, rangeNow));
+// A valid timestamp with rotation signatures still succeeds: the second v1 matches.
+using (var rotationHmac = new HMACSHA256(Encoding.UTF8.GetBytes("whsec_test")))
+{
+    var rotationSignature = Convert.ToHexString(rotationHmac.ComputeHash(Encoding.UTF8.GetBytes("1700000000.{}")));
+    True(rangeVerifier.Verify(
+        $"t=1700000000,v1={new string('0', 64)},v1={rotationSignature}", rangeBody, rangeNow));
+}
+
+// A10-04: a problem+json status of the wrong JSON kind (string/null/object/bool) is a malformed
+// problem, not a reason to tear up the typed error: the caller still gets the generic
+// PaymosApiException with the original HTTP status and raw body, and no invented canonical code.
+var stringStatusBody = "{\"type\":\"x\",\"title\":\"x\",\"status\":\"400\",\"detail\":\"x\",\"code\":\"x\"}";
+var stringStatusClient = new PaymosClient(
+    "pk", "sk", new HttpClient(new ProblemHandler(HttpStatusCode.BadRequest, stringStatusBody)),
+    timeProvider: new FixedTimeProvider(), maxRetries: 0);
+try { await stringStatusClient.System.TimeAsync(); throw new Exception("Expected API error"); }
+catch (PaymosApiException error)
+{
+    Equal(400, error.StatusCode);
+    Equal(stringStatusBody, error.ResponseBody);
+    Equal<int?>(null, error.ProblemStatus);
+    Equal("", error.Code);
+    Equal<string?>(null, error.Type);
+    Equal<string?>(null, error.Detail);
+    Equal("validation", error.Kind);
+}
+foreach (var malformedStatusBody in new[]
+{
+    "{\"type\":\"x\",\"title\":\"x\",\"status\":null,\"detail\":\"x\",\"code\":\"x\"}",
+    "{\"type\":\"x\",\"title\":\"x\",\"status\":{},\"detail\":\"x\",\"code\":\"x\"}",
+    "{\"type\":\"x\",\"title\":\"x\",\"status\":true,\"detail\":\"x\",\"code\":\"x\"}",
+    // A number that no longer fits an int keeps the pre-existing TryGetInt32-false fallback.
+    "{\"type\":\"x\",\"title\":\"x\",\"status\":99999999999,\"detail\":\"x\",\"code\":\"x\"}",
+    // A well-formed number that disagrees with the HTTP status is not this response's problem.
+    "{\"type\":\"x\",\"title\":\"x\",\"status\":401,\"detail\":\"x\",\"code\":\"x\"}",
+})
+{
+    var malformedClient = new PaymosClient(
+        "pk", "sk", new HttpClient(new ProblemHandler(HttpStatusCode.BadRequest, malformedStatusBody)),
+        timeProvider: new FixedTimeProvider(), maxRetries: 0);
+    try { await malformedClient.System.TimeAsync(); throw new Exception("Expected API error"); }
+    catch (PaymosApiException error)
+    {
+        Equal(400, error.StatusCode);
+        Equal(malformedStatusBody, error.ResponseBody);
+        Equal<int?>(null, error.ProblemStatus);
+        Equal("", error.Code);
+    }
+}
+
+if (await RefundsTests.RunAsync(vectors.GetProperty("refunds")) != 0)
+{
+    Environment.ExitCode = 1;
+    return;
+}
 Console.WriteLine("Paymos .NET conformance: PASS");
 
 static string Text(JsonElement value, string name) => value.GetProperty(name).GetString()!;
@@ -299,4 +407,30 @@ sealed class ProblemHandler(HttpStatusCode status, string body) : HttpMessageHan
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
         Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+}
+// A10-01 fixture: headers arrive immediately, the body never does. The attempt token captured by
+// the handler is what a real transport would use to abort the response stream, so the stall ends
+// only when the client's per-attempt deadline (or the caller) cancels it.
+sealed class StalledBodyHandler : HttpMessageHandler
+{
+    public int Attempts { get; private set; }
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Attempts++;
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StalledContent(ct) });
+    }
+}
+sealed class StalledContent(CancellationToken ct) : HttpContent
+{
+    protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+        SerializeToStreamAsync(stream, context, ct);
+
+    protected override async Task SerializeToStreamAsync(
+        Stream stream, TransportContext? context, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(30), linked.Token);
+        await stream.WriteAsync(Encoding.UTF8.GetBytes("[]"), linked.Token);
+    }
+    protected override bool TryComputeLength(out long length) { length = 2; return true; }
 }
