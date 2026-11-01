@@ -39,7 +39,6 @@ public sealed record CreateInvoiceRequest(
     string Currency,
     string ExternalOrderId,
     string? Network = null,
-    bool? AllowMultiplePayments = null,
     byte? CustomerFeePercent = null,
     string? ClientId = null);
 
