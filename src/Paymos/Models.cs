@@ -185,6 +185,8 @@ public sealed record RefundListOptions(
 
 public sealed record Refund
 {
+    public string? Type { get; init; }
+    public string? ProjectId { get; init; }
     public required string WithdrawalId { get; init; }
     public required string InvoiceId { get; init; }
     public required RefundMode Mode { get; init; }
@@ -198,8 +200,6 @@ public sealed record Refund
     public required string Network { get; init; }
     public required string DestinationAddress { get; init; }
     public required string FirstSender { get; init; }
-    public string? Type { get; init; }
-    public string? ProjectId { get; init; }
     public string? TxHash { get; init; }
     public string? ExplorerUrl { get; init; }
     public required long CreatedAt { get; init; }

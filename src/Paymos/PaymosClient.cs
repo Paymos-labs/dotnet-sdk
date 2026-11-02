@@ -311,6 +311,15 @@ public sealed class WithdrawalResource(PaymosClient client)
 
 public sealed class RefundResource(PaymosClient client)
 {
+    public Task<Refund> SimulateAsync(string id, string status, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        if (status is not ("completed" or "failed" or "cancelled"))
+            throw new ArgumentOutOfRangeException(nameof(status));
+        return client.SendAsync<Refund>("POST", $"/v1/sandbox/refunds/{RequestSigner.EncodePathSegment(id)}/simulate",
+            new { status }, cancellationToken: cancellationToken);
+    }
+
     public Task<Refund> CreateAsync(
         string invoiceId,
         RefundMode mode,
@@ -323,15 +332,6 @@ public sealed class RefundResource(PaymosClient client)
             throw new ArgumentOutOfRangeException(nameof(mode));
         return client.SendAsync<Refund>(
             "POST", "/v1/refunds", new { invoiceId, mode, externalOrderId },
-            cancellationToken: cancellationToken);
-    }
-
-    public Task<Refund> SimulateAsync(string id, string status, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentNullException.ThrowIfNull(status);
-        return client.SendAsync<Refund>(
-            "POST", $"/v1/sandbox/refunds/{RequestSigner.EncodePathSegment(id)}/simulate", new { status },
             cancellationToken: cancellationToken);
     }
 

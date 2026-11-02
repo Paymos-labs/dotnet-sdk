@@ -10,9 +10,9 @@ internal static class RefundsTests
     {
         var cases = new (string Name, Func<Task> Run)[]
         {
-            ("simulate terminal status preserves current refund fields", SimulateAsync),
             ("full create and same-key replay", () => CreateAndReplayAsync(vectors)),
             ("overpayment 20 then full 100", () => OverpaymentThenFullAsync(vectors)),
+            ("scoped simulator terminal statuses", SimulatorStatusesAsync),
             ("changed mode returns structured 409", () => ChangedModeAsync(vectors)),
             ("foreign id returns 404", () => NotFoundAsync(vectors, "wdr_foreign")),
             ("missing id returns 404", () => NotFoundAsync(vectors, "wdr_missing")),
@@ -46,35 +46,6 @@ internal static class RefundsTests
         return failed;
     }
 
-    private static async Task SimulateAsync()
-    {
-        const string address = "UQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPuwA";
-        foreach (var status in new[] { "completed", "failed", "cancelled" })
-        {
-            using var handler = new RefundHandler();
-            handler.Enqueue(200, JsonSerializer.Serialize(new
-            {
-                withdrawal_id = "wdr_1", invoice_id = "inv_1", mode = "full", external_order_id = "key",
-                status, is_final = true, is_test = true, amount = "20", currency = "USDT", network = "TON",
-                destination_address = address, first_sender = address, created_at = 1700000000L,
-                type = "refund", project_id = "prj_1"
-            }));
-            using var http = new HttpClient(handler);
-            using var client = Client(http);
-            var result = await client.Refunds.SimulateAsync("wdr/1 ?", status);
-            Equal(status, result.Status.Value);
-            Equal(address, result.DestinationAddress);
-            Equal(address, result.FirstSender);
-            Equal("refund", result.Type);
-            Equal("prj_1", result.ProjectId);
-            Equal("POST /v1/sandbox/refunds/wdr%2F1%20%3F/simulate", handler.Paths[0]);
-            using var body = JsonDocument.Parse(handler.Bodies[0]);
-            Equal(1, body.RootElement.EnumerateObject().Count());
-            Equal(status, body.RootElement.GetProperty("status").GetString());
-            handler.Complete(1);
-        }
-    }
-
     private static async Task CreateAndReplayAsync(JsonElement vectors)
     {
         var create = vectors.GetProperty("create");
@@ -89,6 +60,8 @@ internal static class RefundsTests
         var created = await client.Refunds.CreateAsync(invoiceId, RefundMode.Full, key);
         var replay = await client.Refunds.CreateAsync(invoiceId, RefundMode.Full, key);
         Equal("120", created.Amount);
+        Equal("refund", created.Type);
+        Equal("prj_test", created.ProjectId);
         Equal(RefundMode.Full, created.Mode);
         Equal("wdr_full", created.WithdrawalId);
         Equal(invoiceId, created.InvoiceId);
@@ -118,16 +91,31 @@ internal static class RefundsTests
         Equal("20", over.Amount);
         Equal(RefundMode.Overpayment, over.Mode);
         AssertCreateBody(handler.Bodies[0], body, vectors.GetProperty("create").GetProperty("rejected_fields"));
-        var completed = await client.Withdrawals.SimulateCompletionAsync(over.WithdrawalId);
+        var completed = await client.Refunds.SimulateAsync(over.WithdrawalId, "completed");
         Equal(WithdrawalStatus.Completed, completed.Status);
         True(completed.IsFinal && completed.IsTest);
-        Equal("POST /v1/sandbox/withdrawals/wdr_over/simulate-completion", handler.Paths[1]);
-        Equal("", handler.Bodies[1]);
+        Equal("POST /v1/sandbox/refunds/wdr_over/simulate", handler.Paths[1]);
+        Equal("{\"status\":\"completed\"}", handler.Bodies[1]);
         var full = await client.Refunds.CreateAsync(invoiceId, RefundMode.Full, "remaining-full");
         Equal("100", full.Amount);
         Equal(RefundMode.Full, full.Mode);
         Equal("wdr_remaining", full.WithdrawalId);
         handler.Complete(3);
+    }
+
+    private static async Task SimulatorStatusesAsync()
+    {
+        foreach (var status in new[] { "completed", "failed", "cancelled" })
+        {
+            using var handler = new RefundHandler();
+            handler.Enqueue(200, Wire("wdr_1", "inv_1", "full", "key", "120").Replace("\"created\"", $"\"{status}\""));
+            using var http = new HttpClient(handler);
+            using var client = Client(http);
+            var actual = await client.Refunds.SimulateAsync("wdr /?", status);
+            Equal("POST /v1/sandbox/refunds/wdr%20%2F%3F/simulate", handler.Paths[0]);
+            Equal(status, JsonDocument.Parse(handler.Bodies[0]).RootElement.GetProperty("status").GetString());
+            handler.Complete(1);
+        }
     }
 
     private static async Task ChangedModeAsync(JsonElement vectors)
@@ -216,8 +204,6 @@ internal static class RefundsTests
         Equal("TRC20", created.Network);
         Equal("TFirstSender", created.FirstSender);
         Equal(created.FirstSender, created.DestinationAddress);
-        Equal<string?>(null, created.Type);
-        Equal<string?>(null, created.ProjectId);
         Equal(1700000000L, created.CreatedAt);
         Equal<long?>(null, created.CompletedAt);
         Equal<string?>(null, created.TxHash);
@@ -308,7 +294,7 @@ internal static class RefundsTests
         handler.Enqueue(403, problem);
         using var http = new HttpClient(handler);
         using var client = Client(http);
-        var error = await ThrowsAsync<PaymosApiException>(() => client.Withdrawals.SimulateCompletionAsync("wdr_1"));
+        var error = await ThrowsAsync<PaymosApiException>(() => client.Refunds.SimulateAsync("wdr_1", "completed"));
         AssertProblem(error, 403, "not_sandbox", "permission", problem);
         handler.Complete(1);
     }
@@ -357,7 +343,7 @@ internal static class RefundsTests
     private static string Wire(string id, string invoiceId, string mode, string key, string amount, bool completed = false) =>
         JsonSerializer.Serialize(new
         {
-            withdrawal_id = id, invoice_id = invoiceId, mode, external_order_id = key,
+            type = "refund", project_id = "prj_test", withdrawal_id = id, invoice_id = invoiceId, mode, external_order_id = key,
             status = completed ? "completed" : "created", is_final = completed, is_test = true,
             amount, fee = "0.000000000000000001", currency = "USDT", network = "TRC20",
             destination_address = "TFirstSender", first_sender = "TFirstSender",

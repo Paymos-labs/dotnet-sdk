@@ -7,13 +7,23 @@ internal static class TonWebhookTests
     public static void Run(JsonElement fixtures)
     {
         var vectors = fixtures.GetProperty("vectors");
-        if (vectors.GetArrayLength() != 8) throw new Exception("Expected eight signed raw and friendly schema 1 TON webhook vectors.");
+        var expectedNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "invoice_raw", "withdrawal_raw", "refund_raw", "channel_deposit_raw",
+            "invoice_friendly", "withdrawal_friendly", "refund_friendly", "channel_deposit_friendly",
+            "invoice_v1", "withdrawal_v1", "refund_v1", "channel_deposit_v1",
+            "invoice_v2", "withdrawal_v2", "refund_v2", "channel_deposit_v2"
+        };
+        var actualNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var vector in vectors.EnumerateArray())
+            if (!actualNames.Add(vector.GetProperty("name").GetString()!))
+                throw new Exception("Duplicate signed TON webhook vector.");
+        if (vectors.GetArrayLength() != expectedNames.Count || !actualNames.SetEquals(expectedNames))
+            throw new Exception("Expected all 16 signed TON webhook vectors.");
         var now = DateTimeOffset.FromUnixTimeSeconds(fixtures.GetProperty("now").GetInt64());
         var verifier = new WebhookVerifier(fixtures.GetProperty("secret").GetString()!);
         foreach (var vector in vectors.EnumerateArray())
         {
-            if (vector.GetProperty("version").GetInt32() != 1)
-                throw new Exception("Expected schema 1 webhook payload.");
             var body = vector.GetProperty("raw_body").GetString()!;
             var header = vector.GetProperty("header").GetString()!;
             var evt = verifier.ConstructEvent<JsonElement>(header, Encoding.UTF8.GetBytes(body), now);

@@ -76,13 +76,13 @@ public sealed class PaymosApiException : PaymosException
         {
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
+            // TryGetInt32 throws InvalidOperationException on a non-number JSON kind instead of
+            // returning false, so the kind is checked first: a string/null/object/bool status
+            // makes this a malformed problem, not a broken SDK error contract.
             if (root.ValueKind != JsonValueKind.Object
                 || !TryString(root, "type", out var type)
                 || !TryString(root, "title", out var title)
                 || !root.TryGetProperty("status", out var statusElement)
-                // TryGetInt32 throws InvalidOperationException on a non-number JSON kind instead of
-                // returning false, so the kind is checked first: a string/null/object/bool status
-                // makes this a malformed problem, not a broken SDK error contract.
                 || statusElement.ValueKind != JsonValueKind.Number
                 || !statusElement.TryGetInt32(out var status)
                 || status != httpStatus

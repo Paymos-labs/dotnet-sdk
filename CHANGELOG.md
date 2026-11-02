@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-11-02
+
+- wip: snapshot shared working tree before merging main
+- fix(merge): webhook/TON files take upstream presentation design; DI keeps refund + merchant withdrawal pairs; dotnet-sdk dedupe
+- fix(merge): keep both sides for 126 conflicting files (union / semantic JSON merge); Balance.razor keeps ClickToCopy ID column
+- wip(refunds): merchant refund plugin work (CMS adapters, PHP SDK, tests) - unverified WIP snapshot
+
+- **403 is no longer reported as an authentication failure.** `PaymosApiException.Kind` is `"permission"` for 403; 401 keeps `"authentication"`.
+- **Base URL must use HTTPS.** Plain HTTP is accepted only against a loopback host, which is what a local integration test points at. The API secret signs every request, so a plaintext base URL put that credential on the wire.
+
+- Payment channels: `PaymentChannels` (create, get, list, block, unblock, simulate deposit, bounded
+  iterate) and `PaymentChannelDeposits` (get, read). The deposit endpoint is a feed, not a list — its
+  `PaymentChannelDepositFeedPage.NextCursor` is never null, `Blocked` explains a stalled position, and
+  it deliberately ships no auto-iterator. The three `payment_channel.deposit.*` webhook events decode
+  straight into `PaymentChannelDeposit` through the existing generic `WebhookVerifier.ConstructEvent<TData>`
+  — no new decoding code. `confirming`/`reorged` are advisory and may arrive out of order; only
+  `confirmed` with `IsFinal` true should credit a merchant.
+
 ## [1.4.1] - 2026-11-01
 
 - refactor(invoices): remove the multiple-payment toggle
