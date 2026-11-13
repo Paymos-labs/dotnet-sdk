@@ -39,8 +39,34 @@ foreach (var rail in channel.Networks)
 
 var feed = await paymos.PaymentChannelDeposits.ReadAsync(
     new PaymentChannelDepositFeedOptions(Cursor: savedCursor, Limit: 100));
-foreach (var deposit in feed.Items) Credit(deposit);
+foreach (var deposit in feed.Items) await CreditDepositAsync(deposit); // one credit per deposit.Id, see below
 await SaveCursorAsync(feed.NextCursor);
+```
+
+The feed and the deposit webhook report the same deposits, so both go through one
+`CreditDepositAsync` keyed by the deposit's own `Id` (`pcd_...`). A sketch with a SQL
+store (`credited_deposits.deposit_id` is the primary key; PostgreSQL syntax, Npgsql + Dapper):
+
+```csharp
+async Task CreditDepositAsync(PaymentChannelDeposit deposit)
+{
+    if (!deposit.IsFinal || deposit.ProjectId != MyProjectId || deposit.IsTest != MyIsTest) return;
+
+    await using var tx = await db.BeginTransactionAsync();
+    // The insert and the balance update commit together or not at all. A second
+    // delivery, a second endpoint's copy, or a re-read feed page inserts nothing.
+    var inserted = await db.ExecuteAsync(
+        "INSERT INTO credited_deposits (deposit_id, payer, amount) VALUES (@Id, @Payer, @Net::numeric) " +
+        "ON CONFLICT (deposit_id) DO NOTHING",
+        new { deposit.Id, Payer = deposit.PaymentChannelExternalId, deposit.Net }, tx);
+    if (inserted == 1)
+    {
+        await db.ExecuteAsync(
+            "UPDATE balances SET amount = amount + @Net::numeric WHERE payer = @Payer",
+            new { deposit.Net, Payer = deposit.PaymentChannelExternalId }, tx);
+    }
+    await tx.CommitAsync();
+}
 ```
 
 Four things that bite a caller who guesses. Repeating the same `ExternalId`
@@ -74,9 +100,16 @@ above needs no new decoding code:
 var depositEvent = verifier.ConstructEvent<PaymentChannelDeposit>(signatureHeader, rawRequestBody);
 if (depositEvent.EventType == "payment_channel.deposit.confirmed" && depositEvent.Data.IsFinal)
 {
-    Credit(depositEvent.Data.PaymentChannelExternalId, depositEvent.Data.Net); // idempotent by depositEvent.EventId
+    await CreditDepositAsync(depositEvent.Data); // once per Data.Id, shared with the feed
 }
 ```
+
+`EventId` identifies one delivery, not one payment. Paymos creates a separate event, with
+its own `EventId`, for every webhook endpoint subscribed to the event, and every later
+event about the same invoice or deposit has its own `EventId` too. Store `EventId` to skip
+a redelivered request, but key money and fulfilment on the business identity: the
+invoice/order for invoice events, the deposit `Id` for deposit events. Write that key in
+the same database transaction as the order or balance change.
 
 `confirming` and `reorged` are advisory and may arrive out of order — a `confirming` can
 land after the `confirmed` for the same deposit, and a `reorged` can be superseded by a
