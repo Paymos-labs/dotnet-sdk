@@ -315,7 +315,178 @@ if (await RefundsTests.RunAsync(vectors.GetProperty("refunds")) != 0)
     Environment.ExitCode = 1;
     return;
 }
+await InvoiceProductsConformanceAsync(vectors.GetProperty("invoices"));
 Console.WriteLine("Paymos .NET conformance: PASS");
+
+static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
+{
+    // Legacy positional ctor and 7-argument Deconstruct signature stay 100% intact.
+    var positional = new CreateInvoiceRequest("prj_1", "30.00", "USD", "order-legacy-1", "TRC20", 2, "cust_1");
+    var (dProjectId, dAmount, dCurrency, dExternalOrderId, dNetwork, dFee, dClientId) = positional;
+    Equal("prj_1", dProjectId);
+    Equal("30.00", dAmount);
+    Equal("USD", dCurrency);
+    Equal("order-legacy-1", dExternalOrderId);
+    Equal("TRC20", dNetwork);
+    Equal((byte?)2, dFee);
+    Equal("cust_1", dClientId);
+    Equal<IReadOnlyList<InvoiceProduct>?>(null, positional.Products);
+    Equal(7, typeof(CreateInvoiceRequest).GetConstructors().Single().GetParameters().Length);
+
+    var legacyOrder = new Order { ExternalId = "order_1", Amount = "10.00", Currency = "USD" };
+    Equal<IReadOnlyList<InvoiceProduct>?>(null, legacyOrder.Products);
+
+    // Explicit [JsonIgnore(WhenWritingNull)] omits null fields even without global DefaultIgnoreCondition.
+    var snakeCaseOnly = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+    var minimalOnlyJson = JsonSerializer.Serialize(
+        new CreateInvoiceRequest("prj_1", "12.00", "USD", "order-min")
+        {
+            Products = [new InvoiceProduct { Title = "Priority Support", Quantity = 1, UnitAmount = "12.00" }]
+        },
+        snakeCaseOnly);
+    using (var minimalDoc = JsonDocument.Parse(minimalOnlyJson))
+    {
+        var item = minimalDoc.RootElement.GetProperty("products")[0];
+        True(!item.TryGetProperty("description", out _));
+        True(!item.TryGetProperty("image_url", out _));
+    }
+    using (var legacyOnlyDoc = JsonDocument.Parse(JsonSerializer.Serialize(
+        new CreateInvoiceRequest("prj_1", "30.00", "USD", "order-legacy-1"), snakeCaseOnly)))
+    {
+        True(!legacyOnlyDoc.RootElement.TryGetProperty("products", out _));
+    }
+
+    var handler = new ScriptedHandler();
+    var client = new PaymosClient("pk_test_key", "sk_test_secret", new HttpClient(handler), timeProvider: new FixedTimeProvider(), maxRetries: 0);
+
+    var single = invoices.GetProperty("create_single_product");
+    handler.Enqueue(HttpStatusCode.Created, single.GetProperty("response").GetRawText());
+    var singleResult = await client.Invoices.CreateAsync(
+        new("prj_1", "47.00", "USD", "order-product-single")
+        {
+            Products =
+            [
+                new InvoiceProduct
+                {
+                    Title = "Studio Pro",
+                    Description = "One-month access",
+                    ImageUrl = "https://shop.example/images/studio-pro.webp",
+                    Quantity = 2,
+                    UnitAmount = "24.50"
+                }
+            ]
+        });
+    Equal($"{Text(single, "method")} {Text(single, "path")}", handler.Paths[^1]);
+    using (var singleBody = JsonDocument.Parse(handler.Bodies[^1]))
+        AssertJsonEqual(single.GetProperty("body"), singleBody.RootElement);
+    Equal("inv_prod_1", singleResult.InvoiceId);
+    Equal("47.00", singleResult.Order.Amount);
+    Equal(1, singleResult.Order.Products!.Count);
+    Equal("Studio Pro", singleResult.Order.Products[0].Title);
+    Equal("One-month access", singleResult.Order.Products[0].Description);
+    Equal("https://shop.example/images/studio-pro.webp", singleResult.Order.Products[0].ImageUrl);
+    Equal(2, singleResult.Order.Products[0].Quantity);
+    Equal("24.50", singleResult.Order.Products[0].UnitAmount);
+
+    var multi = invoices.GetProperty("create_multi_product");
+    handler.Enqueue(HttpStatusCode.Created, multi.GetProperty("response").GetRawText());
+    var multiResult = await client.Invoices.CreateAsync(
+        new("prj_1", "59.00", "USD", "order-product-multi")
+        {
+            Products =
+            [
+                new InvoiceProduct
+                {
+                    Title = "Studio Pro",
+                    Description = "One-month access",
+                    ImageUrl = "https://shop.example/images/studio-pro.webp",
+                    Quantity = 2,
+                    UnitAmount = "24.50"
+                },
+                new InvoiceProduct
+                {
+                    Title = "Priority Support",
+                    Quantity = 1,
+                    UnitAmount = "12.00"
+                }
+            ]
+        });
+    Equal($"{Text(multi, "method")} {Text(multi, "path")}", handler.Paths[^1]);
+    using (var multiBody = JsonDocument.Parse(handler.Bodies[^1]))
+    {
+        AssertJsonEqual(multi.GetProperty("body"), multiBody.RootElement);
+        var secondWire = multiBody.RootElement.GetProperty("products")[1];
+        True(!secondWire.TryGetProperty("description", out _));
+        True(!secondWire.TryGetProperty("image_url", out _));
+    }
+    Equal("inv_prod_2", multiResult.InvoiceId);
+    Equal("59.00", multiResult.Order.Amount);
+    Equal(2, multiResult.Order.Products!.Count);
+    Equal("Priority Support", multiResult.Order.Products[1].Title);
+    Equal<string?>(null, multiResult.Order.Products[1].Description);
+    Equal<string?>(null, multiResult.Order.Products[1].ImageUrl);
+    Equal(1, multiResult.Order.Products[1].Quantity);
+    Equal("12.00", multiResult.Order.Products[1].UnitAmount);
+
+    var legacy = invoices.GetProperty("legacy_without_products");
+    handler.Enqueue(HttpStatusCode.Created, legacy.GetProperty("response").GetRawText());
+    var legacyResult = await client.Invoices.CreateAsync(new("prj_1", "30.00", "USD", "order-legacy-1"));
+    using (var legacyBody = JsonDocument.Parse(handler.Bodies[^1]))
+    {
+        AssertJsonEqual(legacy.GetProperty("body"), legacyBody.RootElement);
+        True(!legacyBody.RootElement.TryGetProperty("products", out _));
+    }
+    Equal("30.00", legacyResult.Order.Amount);
+    Equal<IReadOnlyList<InvoiceProduct>?>(null, legacyResult.Order.Products);
+
+    var nullProducts = invoices.GetProperty("null_products");
+    var nullResponseRaw = nullProducts.GetProperty("response").GetRawText();
+    handler.Enqueue(HttpStatusCode.OK, nullResponseRaw);
+    var nullResult = await client.Invoices.GetAsync("inv_null_1");
+    Equal<IReadOnlyList<InvoiceProduct>?>(null, nullResult.Order.Products);
+
+    var explicitNullResponseRaw = nullResponseRaw.Replace("\"currency\":\"USD\"", "\"currency\":\"USD\",\"products\":null");
+    handler.Enqueue(HttpStatusCode.OK, explicitNullResponseRaw);
+    var explicitNullResult = await client.Invoices.GetAsync("inv_null_1");
+    Equal<IReadOnlyList<InvoiceProduct>?>(null, explicitNullResult.Order.Products);
+}
+
+static void AssertJsonEqual(JsonElement expected, JsonElement actual)
+{
+    if (!JsonDeepEquals(expected, actual))
+        throw new Exception($"JSON mismatch.\nExpected: {expected.GetRawText()}\nActual:   {actual.GetRawText()}");
+}
+
+static bool JsonDeepEquals(JsonElement expected, JsonElement actual)
+{
+    if (expected.ValueKind != actual.ValueKind)
+        return false;
+    switch (expected.ValueKind)
+    {
+        case JsonValueKind.Object:
+        {
+            var expectedProps = expected.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal);
+            var actualProps = actual.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal);
+            if (expectedProps.Count != actualProps.Count)
+                return false;
+            foreach (var (name, value) in expectedProps)
+            {
+                if (!actualProps.TryGetValue(name, out var other) || !JsonDeepEquals(value, other))
+                    return false;
+            }
+            return true;
+        }
+        case JsonValueKind.Array:
+            return expected.GetArrayLength() == actual.GetArrayLength() &&
+                expected.EnumerateArray().Zip(actual.EnumerateArray(), JsonDeepEquals).All(x => x);
+        case JsonValueKind.String:
+            return string.Equals(expected.GetString(), actual.GetString(), StringComparison.Ordinal);
+        case JsonValueKind.Number:
+            return string.Equals(expected.GetRawText(), actual.GetRawText(), StringComparison.Ordinal);
+        default:
+            return true;
+    }
+}
 
 static string Text(JsonElement value, string name) => value.GetProperty(name).GetString()!;
 static string ChannelJson(string id, bool acceptingPayments) =>

@@ -33,6 +33,20 @@ public readonly record struct WithdrawalStatus(string Value)
     public override string ToString() => Value;
 }
 
+public sealed record InvoiceProduct
+{
+    public required string Title { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ImageUrl { get; init; }
+
+    public required int Quantity { get; init; }
+    public required string UnitAmount { get; init; }
+}
+
 public sealed record CreateInvoiceRequest(
     string ProjectId,
     string Amount,
@@ -40,7 +54,11 @@ public sealed record CreateInvoiceRequest(
     string ExternalOrderId,
     string? Network = null,
     byte? CustomerFeePercent = null,
-    string? ClientId = null);
+    string? ClientId = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<InvoiceProduct>? Products { get; init; }
+}
 
 public sealed record InvoiceListOptions(
     int? Limit = null,
@@ -58,6 +76,9 @@ public sealed record Order
     public required string Amount { get; init; }
     public required string Currency { get; init; }
     public string? Network { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<InvoiceProduct>? Products { get; init; }
 }
 
 public sealed record Transfer

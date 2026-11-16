@@ -10,13 +10,78 @@ dotnet add package Paymos
 ```
 
 ```csharp
+using Paymos;
+
 using var paymos = new PaymosClient("pk_test_...", "sk_test_...");
+
+// Compatible amount-only call (Products omitted / null; 7-arg positional ctor unchanged)
 var invoice = await paymos.Invoices.CreateAsync(new CreateInvoiceRequest(
     ProjectId: "prj_...",
     Amount: "10.00",
     Currency: "USD",
     ExternalOrderId: "order_123"));
 ```
+
+### Product line items (`products[]`)
+
+Set the optional `Products` `init` property (`1..50` `InvoiceProduct` items) on `CreateInvoiceRequest` to show purchase context on hosted checkout, or leave `Products` `null` for a compatible `amount-only` invoice. Each `InvoiceProduct` requires `Title` (<= 200 Unicode scalar values), positive int32 `Quantity`, and decimal string `UnitAmount` (in the invoice currency); `Description` (plain text, <= 2000 scalars) and `ImageUrl` (HTTPS URL, <= 2048 scalars) are optional nullable `init` properties and are omitted on the wire when `null`.
+
+```csharp
+// 1-item invoice with optional Description and ImageUrl
+var singleInvoice = await paymos.Invoices.CreateAsync(new CreateInvoiceRequest(
+    ProjectId: "prj_...",
+    Amount: "47.00",
+    Currency: "USD",
+    ExternalOrderId: "order_product_single")
+{
+    Products =
+    [
+        new InvoiceProduct
+        {
+            Title = "Studio Pro",
+            Description = "One-month access",
+            ImageUrl = "https://shop.example/images/studio-pro.webp",
+            Quantity = 2,
+            UnitAmount = "24.50",
+        }
+    ]
+});
+
+// Multi-item cart including a minimal 3-field item (no Description / ImageUrl)
+var cartInvoice = await paymos.Invoices.CreateAsync(new CreateInvoiceRequest(
+    ProjectId: "prj_...",
+    Amount: "59.00",
+    Currency: "USD",
+    ExternalOrderId: "order_product_multi")
+{
+    Products =
+    [
+        new InvoiceProduct
+        {
+            Title = "Studio Pro",
+            Description = "One-month access",
+            ImageUrl = "https://shop.example/images/studio-pro.webp",
+            Quantity = 2,
+            UnitAmount = "24.50",
+        },
+        new InvoiceProduct
+        {
+            Title = "Priority Support",
+            Quantity = 1,
+            UnitAmount = "12.00",
+        }
+    ]
+});
+
+foreach (var item in cartInvoice.Order.Products ?? [])
+{
+    Console.WriteLine($"{item.Title} x{item.Quantity} @ {item.UnitAmount}");
+}
+```
+
+- **Authoritative `Amount`:** `Amount` is the exact order total and is never recomputed from `sum(Quantity * UnitAmount)`.
+- **First-success replay:** the first successful `CreateAsync` freezes `Order.Products` on the invoice. Replaying the same `ExternalOrderId` with unchanged `(Amount, Currency, Network)` returns HTTP 200 with the original `Invoice` and `Order.Products`, even if `Products` changed; changing `(Amount, Currency, Network)` throws `PaymosApiException` with status `409` (`invoice_idempotency_conflict`). Legacy and `amount-only` invoices return `Order.Products == null`.
+- **Image/product fallback & webhooks:** invoice creation stores `ImageUrl` without fetching it server-side; if the buyer's browser fails to load an image or an item omits `Description`/`ImageUrl`, checkout hides only the missing media/description and keeps payment active. Signed invoice webhooks omit `products`.
 
 Every operation returns strongly typed records. `ListAsync` returns one
 `Page<T>`; `IterateAsync` exposes a bounded `IAsyncEnumerable<T>` that follows
