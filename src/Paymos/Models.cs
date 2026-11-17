@@ -40,9 +40,6 @@ public sealed record InvoiceProduct
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; init; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ImageUrl { get; init; }
-
     public required int Quantity { get; init; }
     public required string UnitAmount { get; init; }
 }

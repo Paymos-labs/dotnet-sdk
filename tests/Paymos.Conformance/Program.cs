@@ -370,7 +370,6 @@ static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
                 {
                     Title = "Studio Pro",
                     Description = "One-month access",
-                    ImageUrl = "https://shop.example/images/studio-pro.webp",
                     Quantity = 2,
                     UnitAmount = "24.50"
                 }
@@ -378,13 +377,17 @@ static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
         });
     Equal($"{Text(single, "method")} {Text(single, "path")}", handler.Paths[^1]);
     using (var singleBody = JsonDocument.Parse(handler.Bodies[^1]))
+    {
         AssertJsonEqual(single.GetProperty("body"), singleBody.RootElement);
+        var product = singleBody.RootElement.GetProperty("products")[0];
+        Equal(4, product.EnumerateObject().Count());
+        True(!product.TryGetProperty("image_url", out _));
+    }
     Equal("inv_prod_1", singleResult.InvoiceId);
     Equal("47.00", singleResult.Order.Amount);
     Equal(1, singleResult.Order.Products!.Count);
     Equal("Studio Pro", singleResult.Order.Products[0].Title);
     Equal("One-month access", singleResult.Order.Products[0].Description);
-    Equal("https://shop.example/images/studio-pro.webp", singleResult.Order.Products[0].ImageUrl);
     Equal(2, singleResult.Order.Products[0].Quantity);
     Equal("24.50", singleResult.Order.Products[0].UnitAmount);
 
@@ -399,7 +402,6 @@ static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
                 {
                     Title = "Studio Pro",
                     Description = "One-month access",
-                    ImageUrl = "https://shop.example/images/studio-pro.webp",
                     Quantity = 2,
                     UnitAmount = "24.50"
                 },
@@ -424,7 +426,6 @@ static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
     Equal(2, multiResult.Order.Products!.Count);
     Equal("Priority Support", multiResult.Order.Products[1].Title);
     Equal<string?>(null, multiResult.Order.Products[1].Description);
-    Equal<string?>(null, multiResult.Order.Products[1].ImageUrl);
     Equal(1, multiResult.Order.Products[1].Quantity);
     Equal("12.00", multiResult.Order.Products[1].UnitAmount);
 
