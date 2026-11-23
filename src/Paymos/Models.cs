@@ -33,12 +33,21 @@ public readonly record struct WithdrawalStatus(string Value)
     public override string ToString() => Value;
 }
 
+[JsonConverter(typeof(InvoiceProductJsonConverter))]
 public sealed record InvoiceProduct
 {
     public required string Title { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Deprecated compatibility property preserved from v1.5.0. Never serialized onto outbound
+    /// Merchant API requests; populated when reading legacy JSON containing <c>image_url</c>.
+    /// </summary>
+    [JsonIgnore]
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public string? ImageUrl { get; init; }
 
     public required int Quantity { get; init; }
     public required string UnitAmount { get; init; }
@@ -397,6 +406,109 @@ public sealed record WebhookEvent<TData>
     public required int Version { get; init; }
     public required long OccurredAt { get; init; }
     public required TData Data { get; init; }
+}
+
+internal sealed class InvoiceProductJsonConverter : JsonConverter<InvoiceProduct>
+{
+    public override InvoiceProduct Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("Invoice product must be a JSON object.");
+
+        string? title = null;
+        string? description = null;
+        string? imageUrl = null;
+        int? quantity = null;
+        string? unitAmount = null;
+        var comparison = options.PropertyNameCaseInsensitive
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+            {
+                if (title is null || quantity is null || unitAmount is null)
+                    throw new JsonException("Invoice product is missing required properties.");
+
+                return new InvoiceProduct
+                {
+                    Title = title,
+                    Description = description,
+                    ImageUrl = imageUrl,
+                    Quantity = quantity.Value,
+                    UnitAmount = unitAmount
+                };
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+                throw new JsonException("Expected property name in invoice product.");
+
+            var propertyName = reader.GetString();
+            if (!reader.Read())
+                throw new JsonException("Unexpected end of invoice product JSON.");
+
+            if (string.Equals(propertyName, "title", comparison))
+            {
+                title = reader.TokenType switch
+                {
+                    JsonTokenType.Null => null,
+                    JsonTokenType.String => reader.GetString(),
+                    _ => throw new JsonException("Invoice product title must be a string.")
+                };
+            }
+            else if (string.Equals(propertyName, "description", comparison))
+            {
+                description = reader.TokenType switch
+                {
+                    JsonTokenType.Null => null,
+                    JsonTokenType.String => reader.GetString(),
+                    _ => throw new JsonException("Invoice product description must be a string or null.")
+                };
+            }
+            else if (string.Equals(propertyName, "image_url", comparison) || string.Equals(propertyName, "imageUrl", comparison))
+            {
+                imageUrl = reader.TokenType switch
+                {
+                    JsonTokenType.Null => null,
+                    JsonTokenType.String => reader.GetString(),
+                    _ => throw new JsonException("Invoice product image_url must be a string or null.")
+                };
+            }
+            else if (string.Equals(propertyName, "quantity", comparison))
+            {
+                if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt32(out var parsedQuantity))
+                    throw new JsonException("Invoice product quantity must be a 32-bit integer.");
+                quantity = parsedQuantity;
+            }
+            else if (string.Equals(propertyName, "unit_amount", comparison) || string.Equals(propertyName, "unitAmount", comparison))
+            {
+                unitAmount = reader.TokenType switch
+                {
+                    JsonTokenType.Null => null,
+                    JsonTokenType.String => reader.GetString(),
+                    _ => throw new JsonException("Invoice product unit_amount must be a string.")
+                };
+            }
+            else
+            {
+                reader.Skip();
+            }
+        }
+
+        throw new JsonException("Unexpected end of invoice product JSON.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, InvoiceProduct value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("title", value.Title);
+        if (value.Description is not null)
+            writer.WriteString("description", value.Description);
+        writer.WriteNumber("quantity", value.Quantity);
+        writer.WriteString("unit_amount", value.UnitAmount);
+        writer.WriteEndObject();
+    }
 }
 
 internal sealed class InvoiceStatusJsonConverter : JsonConverter<InvoiceStatus>

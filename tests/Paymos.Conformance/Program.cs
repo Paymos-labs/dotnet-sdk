@@ -450,6 +450,58 @@ static async Task InvoiceProductsConformanceAsync(JsonElement invoices)
     handler.Enqueue(HttpStatusCode.OK, explicitNullResponseRaw);
     var explicitNullResult = await client.Invoices.GetAsync("inv_null_1");
     Equal<IReadOnlyList<InvoiceProduct>?>(null, explicitNullResult.Order.Products);
+
+    // Deprecated v1.5.0 ImageUrl stays source-compatible, never serializes on wire, and reads legacy payloads cleanly.
+    var legacyCallerProduct = new InvoiceProduct
+    {
+        Title = "Studio Pro",
+        Description = "One-month access",
+        ImageUrl = "https://cdn.example/retired.png",
+        Quantity = 2,
+        UnitAmount = "24.50"
+    };
+    Equal("https://cdn.example/retired.png", legacyCallerProduct.ImageUrl);
+    using (var bareDoc = JsonDocument.Parse(JsonSerializer.Serialize(legacyCallerProduct, snakeCaseOnly)))
+    {
+        True(!bareDoc.RootElement.TryGetProperty("image_url", out _));
+        Equal(4, bareDoc.RootElement.EnumerateObject().Count());
+    }
+    var legacyNullImageProduct = new InvoiceProduct
+    {
+        Title = "Priority Support",
+        ImageUrl = null,
+        Quantity = 1,
+        UnitAmount = "12.00"
+    };
+    using (var bareNullDoc = JsonDocument.Parse(JsonSerializer.Serialize(legacyNullImageProduct, snakeCaseOnly)))
+    {
+        True(!bareNullDoc.RootElement.TryGetProperty("image_url", out _));
+        True(!bareNullDoc.RootElement.TryGetProperty("description", out _));
+    }
+
+    handler.Enqueue(HttpStatusCode.Created, single.GetProperty("response").GetRawText());
+    await client.Invoices.CreateAsync(
+        new("prj_1", "47.00", "USD", "order-product-single")
+        {
+            Products = [legacyCallerProduct]
+        });
+    using (var legacyImageWire = JsonDocument.Parse(handler.Bodies[^1]))
+    {
+        AssertJsonEqual(single.GetProperty("body"), legacyImageWire.RootElement);
+        True(!legacyImageWire.RootElement.GetProperty("products")[0].TryGetProperty("image_url", out _));
+    }
+
+    var decodedHistorical = JsonSerializer.Deserialize<InvoiceProduct>(
+        """{"title":"Studio Pro","description":"One-month access","image_url":"https://cdn.example/historical.png","quantity":2,"unit_amount":"24.50","future_field":123}""",
+        snakeCaseOnly);
+    Equal("https://cdn.example/historical.png", decodedHistorical!.ImageUrl);
+    Equal("Studio Pro", decodedHistorical.Title);
+
+    var decodedNullImage = JsonSerializer.Deserialize<InvoiceProduct>(
+        """{"title":"Priority Support","image_url":null,"quantity":1,"unit_amount":"12.00"}""",
+        snakeCaseOnly);
+    Equal<string?>(null, decodedNullImage!.ImageUrl);
+    Equal("Priority Support", decodedNullImage.Title);
 }
 
 static void AssertJsonEqual(JsonElement expected, JsonElement actual)
